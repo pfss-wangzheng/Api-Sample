@@ -1,0 +1,87 @@
+name: DEPLOY
+
+on: 
+  push:
+    branches:
+      - main
+    paths:
+      - /src/main/**  
+  workflow_dispatch:             
+
+permissions:
+  contents: read                 
+  pages: write                   
+  id-token: write                 
+  
+concurrency:
+  group: "java"
+  cancel-in-progress: true
+
+jobs: 
+  buildjava:
+    runs-on: ubuntu-latest
+    steps: 
+    - uses: actions/checkout@v4   
+      with: 
+        path: main
+    - name: Setup Java
+      uses: actions/setup-java@v4    
+      with:
+        java-version: '17'
+        distribution: 'temurin'
+        cache: maven                 
+    - name: Build with Maven        
+      run: mvn --file pom.xml package
+    - name: run jar file           
+      run: nohup java -jar target/Api-Sample-0.0.1-SNAPSHOT.jar &
+    - name: make dir                  #tempフォルダ作成,swagger jsonファイルを格納
+      run: mkdir -p temp
+    - name: get json file             #swagger-uiのJSONファイル取得して,swagger.jsonに保存
+      run: curl -o temp/swagger.json http://127.0.0.1:8080/v3/api-docs
+    - name: Upload artifact for next job #upload-artifactでjsonをupload,次のjobを使用
+      uses: actions/upload-artifact@v4
+      with:
+        name: jsonfile
+        path: temp
+  buildswagger:
+    runs-on: ubuntu-latest
+    steps:
+    - name: Checkout swagger-ui       #checkout swagger-ui
+      uses: actions/checkout@v4
+      with:
+        repository: swagger-api/swagger-ui
+        ref: 'v5.2.0'
+        path: swagger-ui
+    - name: Modify Initializer.js       #swagger-initializer.jsを修正,ローカルswagger.jsonファイルを使用
+      run: sed -i 's$"https:\/\/petstore\.swagger\.io\/v2\/swagger\.json"$new URL\(location\)\.searchParams\.get\("q"\) \|\| "swagger\.json"$g' swagger-ui/dist/swagger-initializer.js
+    - name: Upload artifact for next job #upload-artifactでresourceをupload,次のjobを使用
+      uses: actions/upload-artifact@v4
+      with:
+        name: swagger-ui
+        path: swagger-ui/dist
+  makejsonAndDeploy: 
+    needs: [buildjava,buildswagger]       #前JOB完了してからこのJOB実行できる
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages-swagger-ui-java   #environment名前
+      url: ${{ steps.deployment.outputs.page_url }}swagger-ui-java  #アクセスのurl
+    steps: 
+    - name: Download artifact from buildjava job    #前JOBのJSONファイルを取得
+      uses: actions/download-artifact@v4
+      with:
+        name: jsonfile                            
+        path: swagger-temp/swagger-ui-java          #swagger-temp/swagger-ui-javaに保存された
+    - name: Download artifact from buildswagger job #前JOBのswaggerファイルを取得
+      uses: actions/download-artifact@v4
+      with:
+        name: swagger-ui
+        path: swagger-temp/swagger-ui-java          #swagger-temp/swagger-ui-javaに保存された
+    - name: Setup Pages                             #github-pagesを配置
+      uses: actions/configure-pages@v4
+    - name: Upload artifact                         #github-pages使用されたファイルをUPLOAD
+      uses: actions/upload-pages-artifact@v3
+      with:
+        path: 'swagger-temp'
+    - name: Deploy to GitHub Pages                    #github-pagesにDEPLOY
+      id: deployment
+      uses: actions/deploy-pages@v4
